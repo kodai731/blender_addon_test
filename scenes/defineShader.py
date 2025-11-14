@@ -98,6 +98,7 @@ print(f"✅ Batch created with world coordinates and normals")
 bpy.types.SpaceView3D._custom_shader = shader
 bpy.types.SpaceView3D._custom_shader_batch = batch
 bpy.types.SpaceView3D._custom_shader_normal_length = 0.2  # 法線の長さ
+bpy.types.SpaceView3D._custom_shader_arrow_size = 0.3  # 矢印の羽のサイズ（法線の長さに対する比率）
 
 def draw():
     try:
@@ -105,6 +106,7 @@ def draw():
         current_shader = bpy.types.SpaceView3D._custom_shader
         current_batch = bpy.types.SpaceView3D._custom_shader_batch
         normal_length = bpy.types.SpaceView3D._custom_shader_normal_length
+        arrow_size = bpy.types.SpaceView3D._custom_shader_arrow_size
 
         if current_shader is None or current_batch is None:
             return
@@ -123,6 +125,9 @@ def draw():
 
         # 法線の長さを設定
         current_shader.uniform_float("normalLength", normal_length)
+
+        # 矢印の羽のサイズを設定
+        current_shader.uniform_float("arrowSize", arrow_size)
 
         # 描画状態の設定
         gpu.state.depth_test_set('LESS_EQUAL')

@@ -1,6 +1,29 @@
 import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
+from pathlib import Path
+
+def get_script_directory():
+    """スクリプトのディレクトリを取得（Blenderテキストエディタ対応）"""
+    # .blendファイルが保存されている場合、そのディレクトリを使用
+    if bpy.data.filepath:
+        return Path(bpy.data.filepath).parent
+    else:
+        # 保存されていない場合はエラー
+        raise RuntimeError("❌ .blendファイルを保存してから実行してください")
+
+def load_shader(shader_name):
+    """シェーダーファイルを読み込む"""
+    script_dir = get_script_directory()
+    shader_path = script_dir / "shaders" / shader_name
+
+    try:
+        with open(shader_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        print(f"❌ シェーダーファイルが見つかりません: {shader_path}")
+        print(f"📁 検索場所: {script_dir / 'shaders'}")
+        raise
 
 # 古いハンドラとデータを完全にクリーンアップ
 if hasattr(bpy.types.SpaceView3D, "_custom_shader_handlers"):
@@ -25,22 +48,11 @@ if hasattr(bpy.types.SpaceView3D, "_custom_shader"):
 bpy.types.SpaceView3D._custom_shader_handlers = []
 
 
-vertex_shader = '''
-in vec3 position;
-uniform mat4 ModelViewProjectionMatrix;
-void main()
-{
-    gl_Position = ModelViewProjectionMatrix * vec4(position, 1.0);
-}
-'''
-
-fragment_shader = '''
-out vec4 FragColor;
-void main()
-{
-    FragColor = vec4(1.0, 1.0, 1.0, 1.0);
-}
-'''
+# シェーダーファイルを読み込む
+print("📖 Loading shader files...")
+vertex_shader = load_shader("whiteShader.vert")
+fragment_shader = load_shader("whiteShader.frag")
+print("✅ Shader files loaded successfully")
 
 shader = gpu.types.GPUShader(vertex_shader, fragment_shader)
 print("✅ Shader created successfully")

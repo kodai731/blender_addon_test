@@ -105,11 +105,36 @@ def draw():
         # 保存されたシェーダーとバッチを使用
         current_shader = bpy.types.SpaceView3D._custom_shader
         current_batch = bpy.types.SpaceView3D._custom_shader_batch
-        normal_length = bpy.types.SpaceView3D._custom_shader_normal_length
-        arrow_size = bpy.types.SpaceView3D._custom_shader_arrow_size
+        base_normal_length = bpy.types.SpaceView3D._custom_shader_normal_length
+        base_arrow_size = bpy.types.SpaceView3D._custom_shader_arrow_size
 
         if current_shader is None or current_batch is None:
             return
+
+        # region_3dを取得してview_distanceを取得
+        region_3d = None
+        for area in bpy.context.screen.areas:
+            if area.type == 'VIEW_3D':
+                for space in area.spaces:
+                    if space.type == 'VIEW_3D':
+                        region_3d = space.region_3d
+                        break
+                break
+
+        # デフォルトのスケールファクター
+        scale_factor = 1.0
+
+        if region_3d and hasattr(region_3d, 'view_distance'):
+            # view_distanceに基づいてスケーリング
+            # 基準距離を5.0とする（この距離でオリジナルサイズ）
+            base_distance = 5.0
+            scale_factor = region_3d.view_distance / base_distance
+            # 最小値と最大値を設定して極端な値を防ぐ
+            scale_factor = max(0.1, min(scale_factor, 10.0))
+
+        # スケーリングされた値を計算
+        scaled_normal_length = base_normal_length * scale_factor
+        scaled_arrow_size = base_arrow_size
 
         current_shader.bind()
 
@@ -123,11 +148,11 @@ def draw():
         identity = mathutils.Matrix.Identity(4)
         current_shader.uniform_float("NormalMatrix", identity)
 
-        # 法線の長さを設定
-        current_shader.uniform_float("normalLength", normal_length)
+        # スケーリングされた法線の長さを設定
+        current_shader.uniform_float("normalLength", scaled_normal_length)
 
         # 矢印の羽のサイズを設定
-        current_shader.uniform_float("arrowSize", arrow_size)
+        current_shader.uniform_float("arrowSize", scaled_arrow_size)
 
         # 描画状態の設定
         gpu.state.depth_test_set('LESS_EQUAL')

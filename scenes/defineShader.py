@@ -52,10 +52,11 @@ bpy.types.SpaceView3D._custom_shader_handlers = []
 print("📖 Loading shader files...")
 vertex_shader = load_shader("whiteShader.vert")
 fragment_shader = load_shader("whiteShader.frag")
+geometry_shader = load_shader("whiteShader.geom")
 print("✅ Shader files loaded successfully")
 
-shader = gpu.types.GPUShader(vertex_shader, fragment_shader)
-print("✅ Shader created successfully")
+shader = gpu.types.GPUShader(vertex_shader, fragment_shader, geocode=geometry_shader)
+print("✅ Shader created successfully (with geometry shader)")
 
 obj = bpy.context.active_object
 if obj is None:
@@ -80,23 +81,30 @@ print(f"✅ Model matrix:\n{model_matrix}")
 verts = [model_matrix @ v.co for v in mesh.vertices]
 indices = [tuple(tri.vertices) for tri in mesh.loop_triangles]
 
+# 法線をワールド座標に変換（回転と拡大のみ、平行移動は適用しない）
+normal_matrix = model_matrix.to_3x3().inverted().transposed()
+normals = [normal_matrix @ v.normal for v in mesh.vertices]
+
 print(f"✅ Mesh data: {len(verts)} vertices, {len(indices)} triangles")
 print(f"   First 3 vertices (local): {[v.co for v in mesh.vertices[:3]]}")
 print(f"   First 3 vertices (world): {verts[:3]}")
+print(f"   First 3 normals (world): {normals[:3]}")
 print(f"   First 3 indices: {indices[:3]}")
 
-batch = batch_for_shader(shader, 'TRIS', {"position": verts}, indices=indices)
-print(f"✅ Batch created with world coordinates")
+batch = batch_for_shader(shader, 'TRIS', {"position": verts, "normal": normals}, indices=indices)
+print(f"✅ Batch created with world coordinates and normals")
 
 # バッチとシェーダーを保存（再利用のため）
 bpy.types.SpaceView3D._custom_shader = shader
 bpy.types.SpaceView3D._custom_shader_batch = batch
+bpy.types.SpaceView3D._custom_shader_normal_length = 0.2  # 法線の長さ
 
 def draw():
     try:
         # 保存されたシェーダーとバッチを使用
         current_shader = bpy.types.SpaceView3D._custom_shader
         current_batch = bpy.types.SpaceView3D._custom_shader_batch
+        normal_length = bpy.types.SpaceView3D._custom_shader_normal_length
 
         if current_shader is None or current_batch is None:
             return
@@ -106,6 +114,15 @@ def draw():
         # MVP行列を取得して設定
         mvp = gpu.matrix.get_projection_matrix() @ gpu.matrix.get_model_view_matrix()
         current_shader.uniform_float("ModelViewProjectionMatrix", mvp)
+
+        # NormalMatrix（法線変換用）を設定
+        # ビュー空間での法線変換なので、単位行列を使用（既にワールド座標に変換済み）
+        import mathutils
+        identity = mathutils.Matrix.Identity(4)
+        current_shader.uniform_float("NormalMatrix", identity)
+
+        # 法線の長さを設定
+        current_shader.uniform_float("normalLength", normal_length)
 
         # 描画状態の設定
         gpu.state.depth_test_set('LESS_EQUAL')

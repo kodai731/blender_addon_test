@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 from datetime import datetime
 
+
 def get_script_directory():
     """スクリプトのディレクトリを取得（Blenderテキストエディタ対応）"""
     # .blendファイルが保存されている場合、そのディレクトリを使用
@@ -11,6 +12,7 @@ def get_script_directory():
     else:
         # 保存されていない場合はエラー
         raise RuntimeError("❌ .blendファイルを保存してから実行してください")
+
 
 # 古いハンドラをクリーンアップ
 if hasattr(bpy.types.Scene, "_animation_matrix_export_handlers"):
@@ -46,17 +48,21 @@ all_frames_data = []
 # 前フレームのデータを保存（変化量計算用）
 previous_frame_data = {}
 
+
 def matrix_to_list(matrix):
     """Matrixオブジェクトをリストに変換"""
     return [list(row) for row in matrix]
+
 
 def vector_to_list(vector):
     """Vectorをリストに変換"""
     return [round(v, 6) for v in vector]
 
+
 def quaternion_to_list(quat):
     """Quaternionをリストに変換 (w, x, y, z)"""
     return [round(quat.w, 6), round(quat.x, 6), round(quat.y, 6), round(quat.z, 6)]
+
 
 def get_keyframe_info(obj):
     """オブジェクトのキーフレーム情報を取得"""
@@ -83,6 +89,37 @@ def get_keyframe_info(obj):
 
     return keyframe_info
 
+
+def get_bone_keyframe_info(armature_obj, bone_name):
+    """ボーンのキーフレーム情報を取得"""
+    keyframe_info = {
+        "has_keyframes": False,
+        "channels": []
+    }
+
+    if armature_obj.animation_data and armature_obj.animation_data.action:
+        action = armature_obj.animation_data.action
+        frame = bpy.context.scene.frame_current
+
+        # ボーンのdata_pathを検索（例: pose.bones["BoneName"].location）
+        bone_path_prefix = f'pose.bones["{bone_name}"].'
+
+        for fcurve in action.fcurves:
+            if fcurve.data_path.startswith(bone_path_prefix):
+                # 現在のフレームにキーフレームがあるか確認
+                for keyframe in fcurve.keyframe_points:
+                    if abs(keyframe.co[0] - frame) < 0.01:  # フレーム番号の誤差許容
+                        keyframe_info["has_keyframes"] = True
+                        keyframe_info["channels"].append({
+                            "data_path": fcurve.data_path,
+                            "array_index": fcurve.array_index,
+                            "value": round(keyframe.co[1], 6),
+                            "interpolation": keyframe.interpolation
+                        })
+
+    return keyframe_info
+
+
 def export_frame_data(scene):
     """現在のフレームのデータをエクスポート"""
     global previous_frame_data
@@ -96,7 +133,8 @@ def export_frame_data(scene):
         "frame": frame,
         "time": round(time, 4),
         "fps": round(fps, 2),
-        "meshes": []
+        "meshes": [],
+        "armatures": []
     }
 
     # 全メッシュオブジェクトを取得
@@ -154,6 +192,83 @@ def export_frame_data(scene):
 
         frame_data["meshes"].append(mesh_info)
 
+    # 全アーマチュアオブジェクトを取得
+    armature_objects = [obj for obj in scene.objects if obj.type == 'ARMATURE']
+
+    for armature_obj in armature_objects:
+        armature_info = {
+            "name": armature_obj.name,
+            "world_matrix": matrix_to_list(armature_obj.matrix_world),
+            "bones": []
+        }
+
+        # ポーズボーンのデータを取得
+        if armature_obj.pose:
+            for pose_bone in armature_obj.pose.bones:
+                # ボーンのワールド行列とローカル行列を取得
+                bone_matrix = pose_bone.matrix
+                bone_matrix_basis = pose_bone.matrix_basis
+                bone_matrix_channel = pose_bone.matrix_channel
+
+                # 行列から位置・回転・スケールを分解
+                bone_loc, bone_rot_quat, bone_scale = bone_matrix.decompose()
+
+                bone_info = {
+                    "name": pose_bone.name,
+                    "parent": pose_bone.parent.name if pose_bone.parent else None,
+                    # 行列情報
+                    "matrix": matrix_to_list(bone_matrix),  # ポーズ空間での最終的な行列
+                    "matrix_basis": matrix_to_list(bone_matrix_basis),  # ローカル変換
+                    "matrix_channel": matrix_to_list(bone_matrix_channel),  # アニメーションチャンネルの行列
+                    # 分解された値
+                    "location": vector_to_list(bone_loc),
+                    "rotation_quaternion": quaternion_to_list(bone_rot_quat),
+                    "scale": vector_to_list(bone_scale),
+                    # キーフレーム情報
+                    "keyframe_info": get_bone_keyframe_info(armature_obj, pose_bone.name)
+                }
+
+                # ボーンの回転モードに応じて回転情報を追加
+                if pose_bone.rotation_mode == 'QUATERNION':
+                    bone_info["rotation_mode"] = "QUATERNION"
+                    bone_info["rotation"] = quaternion_to_list(pose_bone.rotation_quaternion)
+                elif pose_bone.rotation_mode == 'AXIS_ANGLE':
+                    bone_info["rotation_mode"] = "AXIS_ANGLE"
+                    bone_info["rotation_axis_angle"] = [
+                        round(pose_bone.rotation_axis_angle[0], 6),
+                        round(pose_bone.rotation_axis_angle[1], 6),
+                        round(pose_bone.rotation_axis_angle[2], 6),
+                        round(pose_bone.rotation_axis_angle[3], 6)
+                    ]
+                else:  # EULER
+                    bone_info["rotation_mode"] = pose_bone.rotation_mode
+                    bone_info["rotation_euler"] = vector_to_list(pose_bone.rotation_euler)
+
+                # 前フレームとの差分を計算
+                bone_key = f"{armature_obj.name}:{pose_bone.name}"
+                if bone_key in previous_frame_data:
+                    prev = previous_frame_data[bone_key]
+                    from mathutils import Vector
+                    delta = {
+                        "location": vector_to_list(bone_loc - prev["location"]),
+                        "scale": vector_to_list(bone_scale - prev["scale"]),
+                        "distance_moved": round((bone_loc - prev["location"]).length, 6)
+                    }
+                    bone_info["delta"] = delta
+                    bone_info["changed"] = delta["distance_moved"] > 0.0001
+                else:
+                    bone_info["changed"] = True  # 初回フレーム
+
+                # 次回の差分計算用に保存
+                previous_frame_data[bone_key] = {
+                    "location": bone_loc.copy(),
+                    "scale": bone_scale.copy()
+                }
+
+                armature_info["bones"].append(bone_info)
+
+        frame_data["armatures"].append(armature_info)
+
     # 出力処理
     if output_mode == "console":
         print("=" * 80)
@@ -189,10 +304,51 @@ def export_frame_data(scene):
             for i, row in enumerate(mesh_info['world_matrix']):
                 print(f"      [{i}] {[round(v, 6) for v in row]}")
 
+        # アーマチュアとボーン情報を表示
+        for armature_info in frame_data["armatures"]:
+            print(f"\n🦴 Armature: {armature_info['name']}")
+            print(f"   Bones: {len(armature_info['bones'])}")
+
+            for bone_info in armature_info["bones"]:
+                # 変化がないボーンはスキップ（オプション：コメントアウトで全て表示）
+                # if not bone_info["changed"]:
+                #     continue
+
+                change_mark = "🔴" if bone_info["changed"] else "⚪"
+                key_mark = "🔑" if bone_info["keyframe_info"]["has_keyframes"] else ""
+                parent_info = f" (parent: {bone_info['parent']})" if bone_info['parent'] else ""
+                print(f"\n   {change_mark} {key_mark} Bone: {bone_info['name']}{parent_info}")
+
+                print(f"      📍 Location: {bone_info['location']}")
+                print(f"      🔄 Rotation Mode: {bone_info['rotation_mode']}")
+                if 'rotation_euler' in bone_info:
+                    print(f"      🔄 Rotation (Euler): {bone_info['rotation_euler']}")
+                elif 'rotation' in bone_info:
+                    print(f"      🔄 Rotation (Quat): {bone_info['rotation']}")
+                print(f"      🔄 Rotation (Quat from Matrix): {bone_info['rotation_quaternion']}")
+                print(f"      📏 Scale: {bone_info['scale']}")
+
+                # 変化量を表示
+                if "delta" in bone_info:
+                    print(f"      📊 Delta Location: {bone_info['delta']['location']}")
+                    print(f"      📊 Distance Moved: {bone_info['delta']['distance_moved']}")
+
+                # キーフレーム情報を表示
+                if bone_info["keyframe_info"]["has_keyframes"]:
+                    print(f"      🔑 Keyframe Channels:")
+                    for ch in bone_info["keyframe_info"]["channels"]:
+                        print(
+                            f"         - {ch['data_path']}[{ch['array_index']}] = {ch['value']} ({ch['interpolation']})")
+
+                print(f"\n      🦴 Bone Matrix:")
+                for i, row in enumerate(bone_info['matrix']):
+                    print(f"         [{i}] {[round(v, 6) for v in row]}")
+
         print("=" * 80)
 
     elif output_mode == "file":
         all_frames_data.append(frame_data)
+
 
 # アニメーション停止時にファイルに保存する関数
 def save_to_file():
@@ -217,6 +373,7 @@ def save_to_file():
     elif not all_frames_data:
         print("⚠️ 保存するデータがありません。アニメーションを再生してください")
 
+
 def on_frame_change(scene):
     """フレーム変更時のコールバック"""
     try:
@@ -226,8 +383,10 @@ def on_frame_change(scene):
         import traceback
         traceback.print_exc()
 
+
 # 最後のフレーム番号を記録（再生完了検出用）
 last_frame_number = None
+
 
 def check_animation_end(scene):
     """アニメーション再生終了時に自動保存"""
@@ -245,7 +404,9 @@ def check_animation_end(scene):
             import time
             time.sleep(0.5)
             save_to_file()
+
         threading.Thread(target=delayed_save, daemon=True).start()
+
 
 # ハンドラを登録
 bpy.app.handlers.frame_change_post.append(on_frame_change)
@@ -253,9 +414,16 @@ bpy.app.handlers.frame_change_post.append(check_animation_end)
 bpy.types.Scene._animation_matrix_export_handlers.append(on_frame_change)
 bpy.types.Scene._animation_matrix_export_handlers.append(check_animation_end)
 
+mesh_count = len([obj for obj in bpy.context.scene.objects if obj.type == 'MESH'])
+armature_count = len([obj for obj in bpy.context.scene.objects if obj.type == 'ARMATURE'])
+total_bones = sum(len(obj.pose.bones) if obj.pose else 0 for obj in bpy.context.scene.objects if obj.type == 'ARMATURE')
+
 print("✅ アニメーション行列エクスポーターを初期化しました")
 print(f"   出力モード: {output_mode}")
-print(f"   対象メッシュ数: {len([obj for obj in bpy.context.scene.objects if obj.type == 'MESH'])}")
+print(f"   対象メッシュ数: {mesh_count}")
+print(f"   対象アーマチュア数: {armature_count}")
+if total_bones > 0:
+    print(f"   対象ボーン数: {total_bones}")
 if output_mode == "file" and output_file_path:
     print(f"   出力先: {output_file_path}")
 print("\n▶️ アニメーションを再生すると、フレーム毎にデータが出力されます")
